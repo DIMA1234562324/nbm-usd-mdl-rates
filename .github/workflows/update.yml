@@ -5,6 +5,11 @@ on:
     - cron: "0 14 * * *"   # ~17:00 Chisinau (summer time)
     - cron: "0 18 * * *"   # backup run
   workflow_dispatch:
+    inputs:
+      force_publish:
+        description: "Publish a new version even if rates did not change (test)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -29,6 +34,10 @@ jobs:
       - name: Fetch rates from bnm.md
         run: node update.mjs
 
+      - name: Force new version (manual test only)
+        if: ${{ inputs.force_publish }}
+        run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));const d=new Date();p.version='1.'+d.toISOString().slice(0,10).replace(/-/g,'')+'.'+(d.getUTCHours()*100+d.getUTCMinutes());fs.writeFileSync('package.json',JSON.stringify(p,null,2)+String.fromCharCode(10))"
+
       - name: Commit data
         run: |
           git config user.name "github-actions[bot]"
@@ -36,9 +45,7 @@ jobs:
           git add rates.json rates.js package.json
           git diff --cached --quiet || (git commit -m "NBM rates $(date -u +%F)" && git push)
 
-      - name: Publish to npm if version is new
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish to npm if version is new (trusted publishing, no token)
         run: |
           LOCAL=$(node -p "require('./package.json').version")
           PUB=$(npm view nbm-usd-mdl-rates version 2>/dev/null || echo none)
