@@ -20,10 +20,11 @@ concurrency: rates
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -52,6 +53,15 @@ jobs:
           echo "local=$LOCAL published=$PUB"
           if [ "$LOCAL" != "$PUB" ]; then
             npm publish --access public
-            sleep 20
-            curl -s "https://purge.jsdelivr.net/npm/nbm-usd-mdl-rates@1/rates.js" || true
+            for i in $(seq 1 30); do
+              [ "$(npm view nbm-usd-mdl-rates version --prefer-online 2>/dev/null)" = "$LOCAL" ] && break
+              sleep 10
+            done
+            sleep 30
           fi
+
+      - name: Refresh jsDelivr cache (every run)
+        run: |
+          for u in "nbm-usd-mdl-rates@1/rates.js" "nbm-usd-mdl-rates@latest/rates.js" "nbm-usd-mdl-rates/rates.js"; do
+            curl -s "https://purge.jsdelivr.net/npm/$u" | head -c 300; echo
+          done
