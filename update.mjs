@@ -1,4 +1,4 @@
-// Official USD/MDL rate of the National Bank of Moldova.
+// Official NBM (National Bank of Moldova) rates: USD/MDL and EUR/MDL.
 // Primary source: bnm.md XML. Fallback (when bnm.md does not answer GitHub's servers):
 // AllRates-Today mirror of the same NBM data (checked: 258 dates, 0 differences).
 // Writes rates.json + rates.js and bumps package.json version when data changed.
@@ -7,7 +7,8 @@ import fs from "node:fs";
 const START = "2026-01-01";
 const FILE = "rates.json";
 const old = fs.existsSync(FILE) ? JSON.parse(fs.readFileSync(FILE, "utf8") || "{}") : {};
-const rates = { ...(old.rates || {}) };
+const rates = { ...(old.rates || {}) };   // USD
+const eur = { ...(old.eur || {}) };       // EUR
 
 const iso = (d) => d.toISOString().slice(0, 10);
 const toRo = (s) => s.split("-").reverse().join(".");
@@ -24,9 +25,14 @@ async function get(url) {
 
 const today = iso(new Date());
 const from = Object.keys(rates).length ? addDays(today, -10) : START;
+const eurFrom = Object.keys(eur).length ? from : START;   // first run with EUR: full backfill
 const to = addDays(today, 3);
 let changed = false, bnmOk = 0, bnmFail = 0;
-const set = (d, v, src) => { v = Number(Number(v).toFixed(4)); if (!(v > 0)) return; if (rates[d] !== v) { rates[d] = v; changed = true; console.log(src, d, v); } };
+const set = (map, d, v, src) => { v = Number(Number(v).toFixed(4)); if (!(v > 0)) return; if (map[d] !== v) { map[d] = v; changed = true; console.log(src, map === eur ? "EUR" : "USD", d, v); } };
+const pick = (xml, code) => {
+  const m = xml.match(new RegExp(`<CharCode>${code}<\\/CharCode>[\\s\\S]*?<Nominal>(\\d+)<\\/Nominal>[\\s\\S]*?<Value>([\\d.,]+)<\\/Value>`));
+  return m ? Number(m[2].replace(",", ".")) / Number(m[1]) : null;
+};
 
 // 1) bnm.md
 for (let d = from; d <= to; d = addDays(d, 1)) {
@@ -36,21 +42,26 @@ for (let d = from; d <= to; d = addDays(d, 1)) {
   bnmOk++;
   const tableDate = (xml.match(/<ValCurs[^>]*Date="([\d.]+)"/) || [])[1];
   if (tableDate !== toRo(d)) continue;
-  const m = xml.match(/<CharCode>USD<\/CharCode>[\s\S]*?<Nominal>(\d+)<\/Nominal>[\s\S]*?<Value>([\d.,]+)<\/Value>/);
-  if (m) set(d, Number(m[2].replace(",", ".")) / Number(m[1]), "bnm");
+  const u = pick(xml, "USD"), e = pick(xml, "EUR");
+  if (u) set(rates, d, u, "bnm");
+  if (e) set(eur, d, e, "bnm");
   await sleep(200);
 }
 
-// 2) fallback mirror (only fills dates bnm.md did not give us)
+// 2) fallback mirror (fills only dates bnm.md did not give us; also backfills EUR history once)
 let mirrorOk = false;
-if (bnmFail > 0) {
-  for (const year of [...new Set([from.slice(0, 4), to.slice(0, 4)])]) {
+const needEurBackfill = eurFrom < from;
+if (bnmFail > 0 || needEurBackfill) {
+  const lo = needEurBackfill ? eurFrom : from;
+  for (const year of [...new Set([lo.slice(0, 4), to.slice(0, 4)])]) {
     const csv = await get(`https://raw.githubusercontent.com/AllRates-Today/central-bank-exchange-rates/main/data/nbm/history/${year}.csv`);
     if (!csv) { console.log("mirror no response for", year); continue; }
     mirrorOk = true;
     for (const line of csv.split("\n")) {
       const [d, base, quote, , value] = line.trim().split(",");
-      if (base === "USD" && quote === "MDL" && d >= from && rates[d] == null) set(d, value, "mirror");
+      if (quote !== "MDL") continue;
+      if (base === "USD" && d >= from && rates[d] == null) set(rates, d, value, "mirror");
+      if (base === "EUR" && d >= eurFrom && eur[d] == null) set(eur, d, value, "mirror");
     }
   }
 }
@@ -58,8 +69,15 @@ if (bnmFail > 0) {
 const keys = Object.keys(rates).sort();
 if (!keys.length) { console.error("No rates at all."); process.exit(1); }
 if (bnmOk === 0 && !mirrorOk) { console.error("Neither bnm.md nor the mirror responded."); process.exit(1); }
+const ekeys = Object.keys(eur).sort();
 
-const out = { source: "National Bank of Moldova — official USD/MDL rate", to: keys[keys.length - 1], rates: Object.fromEntries(keys.map((k) => [k, rates[k]])) };
+const out = {
+  source: "National Bank of Moldova — official USD/MDL and EUR/MDL rates",
+  to: keys[keys.length - 1],
+  rates: Object.fromEntries(keys.map((k) => [k, rates[k]])),
+  eurTo: ekeys[ekeys.length - 1] || null,
+  eur: Object.fromEntries(ekeys.map((k) => [k, eur[k]])),
+};
 fs.writeFileSync(FILE, JSON.stringify(out, null, 1) + "\n");
 fs.writeFileSync("rates.js", "window.NBM_USD_MDL=" + JSON.stringify(out) + ";\n");
 if (changed) {
@@ -69,4 +87,4 @@ if (changed) {
   fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
   console.log("new version", pkg.version);
 }
-console.log(`done: ${keys.length} dates, last ${out.to}, changed=${changed}, bnm ok/fail=${bnmOk}/${bnmFail}, mirror=${mirrorOk}`);
+console.log(`done: USD ${keys.length} dates (last ${out.to}), EUR ${ekeys.length} dates (last ${out.eurTo}), changed=${changed}, bnm ok/fail=${bnmOk}/${bnmFail}, mirror=${mirrorOk}`);
