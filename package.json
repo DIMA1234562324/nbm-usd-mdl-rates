@@ -1,6 +1,6 @@
 {
   "name": "nbm-usd-mdl-rates",
-  "version": "1.20261028.1920",
+  "version": "1.20261029.1925",
   "description": "Official National Bank of Moldova USD/MDL exchange rates, updated daily",
   "main": "rates.json",
   "files": [
